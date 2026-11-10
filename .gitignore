@@ -1,0 +1,31 @@
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Database / generated data
+data/*.xlsx
+data/*.csv
+*.db
+*.sqlite3
+
+# Next.js
+frontend/website/node_modules/
+frontend/website/.next/
+frontend/website/out/
+
+# IDE
+.vscode/
+
+# Temporary files
+*.log
+.DS_Store
