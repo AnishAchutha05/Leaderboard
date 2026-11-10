@@ -29,3 +29,5 @@ frontend/website/out/
 # Temporary files
 *.log
 .DS_Store
+# Extracted design archive
+/gdg-leaderboard/
