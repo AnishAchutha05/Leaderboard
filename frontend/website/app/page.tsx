@@ -21,6 +21,7 @@ export default function Page() {
   const [data, setData] = useState<LeaderboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [backgroundError, setBackgroundError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
@@ -41,6 +42,7 @@ export default function Page() {
       const next = await fetchLeaderboardData();
       setData(next);
       setError(null);
+      setBackgroundError(null);
       setFetchedAt(new Date());
       return true;
     } catch (cause) {
@@ -66,16 +68,58 @@ export default function Page() {
       const next = await fetchLeaderboardData();
       setData(next);
       setError(null);
+      setBackgroundError(null);
       setFetchedAt(new Date());
       showToast({ kind: "ok", text: "Leaderboard updated." });
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Refresh failed.";
-      setError(message);
+      if (data) {
+        setBackgroundError(message);
+      } else {
+        setError(message);
+      }
       showToast({ kind: "err", text: message });
     } finally {
       setRefreshing(false);
     }
-  }, [refreshing, showToast]);
+  }, [refreshing, showToast, data]);
+
+  // Automatic read-only leaderboard refresh every 60 seconds.
+  useEffect(() => {
+    let disposed = false;
+    let inFlight = false;
+
+    const poll = async () => {
+      if (disposed || inFlight) return;
+      inFlight = true;
+      try {
+        const next = await fetchLeaderboardData();
+        if (disposed) return;
+        setData(next);
+        setError(null);
+        setBackgroundError(null);
+        setFetchedAt(new Date());
+      } catch (cause) {
+        // Keep the existing displayed leaderboard when a background poll fails,
+        // but surface a subtle stale-data indication.
+        if (disposed) return;
+        setBackgroundError(
+          cause instanceof Error ? cause.message : "Automatic refresh failed.",
+        );
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    const intervalId = window.setInterval(() => {
+      void poll();
+    }, 60_000);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+    };
+  }, []);
 
   const all = useMemo(() => data?.participants ?? [], [data]);
   const sliced = useMemo(() => filter === "all" ? all : all.slice(0, Number(filter)), [all, filter]);
@@ -133,6 +177,16 @@ export default function Page() {
               >
                 Retry
               </button>
+            </div>
+          )}
+
+          {!loading && data && backgroundError && !error && (
+            <div role="status" className="mb-4 flex items-start gap-3 rounded-lg border border-[#B45309] bg-[#FFFBEB] p-3 text-sm text-[#92400E]">
+              <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+              <div className="min-w-0">
+                <p className="font-semibold">Showing last successfully loaded leaderboard</p>
+                <p className="break-words">Automatic refresh failed: {backgroundError}</p>
+              </div>
             </div>
           )}
 

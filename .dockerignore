@@ -1,0 +1,30 @@
+.git
+.gitignore
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+.pytest_cache
+*.egg-info
+*.log
+.DS_Store
+.vscode
+node_modules
+frontend/website/node_modules
+frontend/website/.next
+frontend/website/out
+.env
+.env.*
+!.env.example
+
+# Never include participant PII in Docker build contexts/images
+data/clean_participants*.xlsx
+data/participants*.xlsx
+data/*participant*.csv
+data/*participants*.csv
+data/*results*.xlsx
+data/*.csv
+
+# Local-only artifacts
+gdg-leaderboard

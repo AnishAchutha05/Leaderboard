@@ -27,9 +27,23 @@ if not raw_database_url:
     )
 DATABASE_URL = normalize_database_url(raw_database_url)
 
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 engine = create_engine(
     DATABASE_URL,
-    pool_pre_ping=True
+    pool_pre_ping=True,
+    pool_size=max(1, _env_int("DB_POOL_SIZE", 5)),
+    max_overflow=max(0, _env_int("DB_MAX_OVERFLOW", 10)),
+    pool_timeout=max(1, _env_int("DB_POOL_TIMEOUT", 30)),
+    pool_recycle=max(-1, _env_int("DB_POOL_RECYCLE", 1800)),
 )
 
 SessionLocal = sessionmaker(

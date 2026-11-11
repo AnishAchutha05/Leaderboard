@@ -7,6 +7,7 @@ opt-in because it launches a browser for every participant.
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 from typing import Any
 
@@ -23,24 +24,43 @@ from ..main import _import_course_rows, _import_users, _import_verified_badges, 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
-PARTICIPANTS_FILE = DATA_DIR / "clean_participants.xlsx"
-COURSE_FILE_CANDIDATES = (
-    DATA_DIR / "GCP_Labs_Courses_Professional.xlsx",
-    DATA_DIR / "course.xlsx",
-)
 PARTICIPANT_SHEET = "Clean Participants"
 COURSE_SHEET = "GCP Labs & Courses"
 VERIFIED_BADGES_FILE = DATA_DIR / "verified_badges.json"
 ADVISORY_LOCK_KEY = 731_804_161_2026
 
 
+def _participants_file() -> Path:
+    configured = os.getenv("PARTICIPANT_WORKBOOK_PATH")
+    if configured:
+        return Path(configured).expanduser()
+    return DATA_DIR / "clean_participants.xlsx"
+
+
+PARTICIPANTS_FILE = _participants_file()
+
+
 def _course_file() -> Path:
-    for path in COURSE_FILE_CANDIDATES:
+    configured = os.getenv("COURSE_WORKBOOK_PATH")
+    if configured:
+        path = Path(configured).expanduser()
+        if path.exists():
+            return path
+        raise FileNotFoundError(
+            f"Course workbook not found at COURSE_WORKBOOK_PATH='{path}'."
+        )
+    for path in (
+        DATA_DIR / "GCP_Labs_Courses_Professional.xlsx",
+        DATA_DIR / "course.xlsx",
+    ):
         if path.exists():
             return path
     raise FileNotFoundError(
-        "Course workbook not found. Expected one of: "
-        + ", ".join(str(path) for path in COURSE_FILE_CANDIDATES)
+        "Course workbook not found. Set COURSE_WORKBOOK_PATH or provide one of: "
+        + ", ".join(str(p) for p in (
+            DATA_DIR / "GCP_Labs_Courses_Professional.xlsx",
+            DATA_DIR / "course.xlsx",
+        ))
     )
 
 
@@ -86,10 +106,14 @@ def seed_database(*, dry_run: bool = False, scrape: bool = False) -> dict[str, A
     """Import workbooks safely; optionally scrape profiles after import."""
     if dry_run and scrape:
         raise ValueError("--dry-run and --scrape cannot be combined; scraping changes database state.")
-    if not PARTICIPANTS_FILE.exists():
-        raise FileNotFoundError(f"Participant workbook not found: {PARTICIPANTS_FILE}")
+    participants_file = _participants_file()
+    if not participants_file.exists():
+        raise FileNotFoundError(
+            f"Participant workbook not found at '{participants_file}'. "
+            "Set PARTICIPANT_WORKBOOK_PATH or provide the workbook at the configured path."
+        )
 
-    participant_rows = load_participants(str(PARTICIPANTS_FILE), PARTICIPANT_SHEET)
+    participant_rows = load_participants(str(participants_file), PARTICIPANT_SHEET)
     course_path = _course_file()
     course_rows = parse_course(str(course_path), sheet_name=COURSE_SHEET)
     verified_badges = _read_verified_badge_evidence()

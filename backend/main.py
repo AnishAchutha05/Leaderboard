@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
+import os
 from pathlib import Path
+import logging
 import re
 import tempfile
 from urllib.parse import urlparse
@@ -10,6 +12,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
+logger = logging.getLogger(__name__)
+
 if __package__:
     from .course_parser import parse_course
     from .database.database import SessionLocal
@@ -17,7 +21,12 @@ if __package__:
     from .excel_manager import load_participants
     from .leaderboard import get_leaderboard
     from .participant_manager import validate_profile_url
-    from .scraper import scrape_badges
+    from .scraper import (
+        DEFAULT_LAUNCH_TIMEOUT_MS,
+        DEFAULT_NAVIGATION_TIMEOUT_MS,
+        DEFAULT_OPERATION_TIMEOUT_MS,
+        scrape_badges,
+    )
 else:  # Keep `uvicorn main:app` from the backend directory working.
     from course_parser import parse_course
     from database.database import SessionLocal
@@ -25,7 +34,12 @@ else:  # Keep `uvicorn main:app` from the backend directory working.
     from excel_manager import load_participants
     from leaderboard import get_leaderboard
     from participant_manager import validate_profile_url
-    from scraper import scrape_badges
+    from scraper import (
+        DEFAULT_LAUNCH_TIMEOUT_MS,
+        DEFAULT_NAVIGATION_TIMEOUT_MS,
+        DEFAULT_OPERATION_TIMEOUT_MS,
+        scrape_badges,
+    )
 
 app = FastAPI(
     title="Google Skills Badge Tracker",
@@ -33,9 +47,23 @@ app = FastAPI(
     version="1.0.0",
 )
 
+def _parse_cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ALLOW_ORIGINS", "http://localhost:3000")
+    origins = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    if not origins:
+        origins = ["http://localhost:3000"]
+    # Wildcard origins are not used with credentials enabled.
+    if "*" in origins:
+        logger.warning("Ignoring wildcard CORS origin because credentials are enabled.")
+        origins = [origin for origin in origins if origin != "*"] or ["http://localhost:3000"]
+    return origins
+
+
+CORS_ALLOW_ORIGINS = _parse_cors_origins()
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=CORS_ALLOW_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -43,16 +71,33 @@ app.add_middleware(
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DATA_DIR.mkdir(exist_ok=True)
-COURSE_FILE = next(
-    (path for path in (
-        DATA_DIR / "GCP_Labs_Courses_Professional.xlsx",
-        DATA_DIR / "course.xlsx",
-    ) if path.exists()),
-    DATA_DIR / "GCP_Labs_Courses_Professional.xlsx",
-)
-PARTICIPANT_FILE = DATA_DIR / "clean_participants.xlsx"
 PARTICIPANT_SHEET = "Clean Participants"
 COURSE_SHEET = "GCP Labs & Courses"
+
+
+def _resolve_course_workbook_path() -> Path:
+    configured = os.getenv("COURSE_WORKBOOK_PATH")
+    if configured:
+        return Path(configured).expanduser()
+    for path in (
+        DATA_DIR / "GCP_Labs_Courses_Professional.xlsx",
+        DATA_DIR / "course.xlsx",
+    ):
+        if path.exists():
+            return path
+    # Sensible local default target path.
+    return DATA_DIR / "course.xlsx"
+
+
+def _resolve_participant_workbook_path() -> Path:
+    configured = os.getenv("PARTICIPANT_WORKBOOK_PATH")
+    if configured:
+        return Path(configured).expanduser()
+    return DATA_DIR / "clean_participants.xlsx"
+
+
+COURSE_FILE = _resolve_course_workbook_path()
+PARTICIPANT_FILE = _resolve_participant_workbook_path()
 
 
 def _normalize_text(value: str | None) -> str:
@@ -93,15 +138,37 @@ def _normalize_profile_url(value: str) -> str:
     return f"https://{host}{parsed.path.rstrip('/') }"
 
 
-def _load_course_rows():
-    if not COURSE_FILE.exists():
-        raise HTTPException(status_code=400, detail=f"Course workbook not found: {COURSE_FILE}")
+def _course_file_for_runtime() -> Path:
+    # Re-resolve on each access so env/default discovery stays current.
+    return _resolve_course_workbook_path()
+
+
+def validate_course_workbook_exists(path: Path | None = None) -> Path:
+    course_path = path or _course_file_for_runtime()
+    if not course_path.exists():
+        raise FileNotFoundError(
+            f"Course workbook not found at '{course_path}'. "
+            "Set COURSE_WORKBOOK_PATH or provide the workbook at the configured path."
+        )
+    return course_path
+
+
+def _load_course_rows(course_path: Path | str | None = None):
+    path = Path(course_path) if course_path is not None else _course_file_for_runtime()
+    if not path.exists():
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Course workbook not found: {path}. "
+                "Set COURSE_WORKBOOK_PATH or provide the workbook at the configured path."
+            ),
+        )
     try:
-        return parse_course(str(COURSE_FILE), sheet_name=COURSE_SHEET)
+        return parse_course(str(path), sheet_name=COURSE_SHEET)
     except ValueError as error:
         # Support earlier workbook exports whose active sheet had another name.
         try:
-            return parse_course(str(COURSE_FILE))
+            return parse_course(str(path))
         except Exception:
             raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:
@@ -302,23 +369,52 @@ def _serialize_users(db: Session) -> list[dict]:
     return course_rows
 
 
-def _process_user(user_id: int) -> dict:
+def _process_user(
+    user_id: int,
+    *,
+    launch_timeout_ms: int = DEFAULT_LAUNCH_TIMEOUT_MS,
+    navigation_timeout_ms: int = DEFAULT_NAVIGATION_TIMEOUT_MS,
+    operation_timeout_ms: int = DEFAULT_OPERATION_TIMEOUT_MS,
+    course_rows: list[dict] | None = None,
+) -> dict:
     started_at = datetime.now(timezone.utc)
+    logger.info("Participant lookup started for user_id=%s", user_id)
     with SessionLocal() as db:
         user = db.get(User, user_id)
         if user is None:
+            logger.warning("Participant lookup failed: user_id=%s not found", user_id)
             raise HTTPException(status_code=404, detail="Participant not found.")
         profile_url = user.public_profile_url
+    logger.info("Participant lookup completed for user_id=%s profile_url=%s", user_id, profile_url)
 
     try:
         if not validate_profile_url(profile_url):
             raise ValueError("Invalid public profile URL")
-        earned_badges = scrape_badges(profile_url)
-        course_rows = _load_course_rows()
+        logger.info("Scrape started for user_id=%s", user_id)
+        earned_badges = scrape_badges(
+            profile_url,
+            launch_timeout_ms=launch_timeout_ms,
+            navigation_timeout_ms=navigation_timeout_ms,
+            operation_timeout_ms=operation_timeout_ms,
+        )
+        logger.info(
+            "Scrape completed for user_id=%s with %d badge(s)",
+            user_id,
+            len(earned_badges),
+        )
+
+        if course_rows is None:
+            logger.info("Course loading started for user_id=%s", user_id)
+            course_rows = _load_course_rows()
+            logger.info("Course loading completed for user_id=%s with %d row(s)", user_id, len(course_rows))
+        else:
+            logger.info("Using cached course rows for user_id=%s (%d row(s))", user_id, len(course_rows))
+
         finished_at = datetime.now(timezone.utc)
         new_badges = 0
         unresolved = []
 
+        logger.info("Database persistence started for user_id=%s", user_id)
         with SessionLocal.begin() as db:
             user = db.get(User, user_id)
             seen_badge_ids = set()
@@ -399,11 +495,19 @@ def _process_user(user_id: int) -> dict:
                 finished_at=finished_at,
             ))
             _import_course_rows(db, course_rows)
+        logger.info(
+            "Database persistence committed for user_id=%s (badges_found=%d, new_badges_found=%d, unresolved=%d)",
+            user_id,
+            len(earned_badges),
+            new_badges,
+            len(unresolved),
+        )
 
         return {"user_id": user_id, "status": "Success", "badges_found": len(earned_badges),
                 "new_badges_found": new_badges, "unresolved": unresolved}
     except Exception as error:
         finished_at = datetime.now(timezone.utc)
+        logger.exception("Participant processing failed for user_id=%s", user_id)
         # Scrape data mutations roll back together. The failure log is committed
         # independently; no existing completion is deleted or overwritten.
         with SessionLocal.begin() as db:
@@ -437,9 +541,10 @@ async def upload_course(file: UploadFile = File(...)):
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    COURSE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    COURSE_FILE.write_bytes(content)
-    rows = _load_course_rows()
+    target_path = _course_file_for_runtime()
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_bytes(content)
+    rows = _load_course_rows(target_path)
     with SessionLocal.begin() as db:
         result = _import_course_rows(db, rows)
     return {"message": "Course workbook uploaded and checked.", "total_labs": len(rows),
@@ -493,7 +598,8 @@ def process_all_participants():
         user_ids = list(db.scalars(select(User.id).order_by(User.id)).all())
     if not user_ids:
         raise HTTPException(status_code=400, detail="Import a participant workbook first.")
-    results = [_process_user(user_id) for user_id in user_ids]
+    course_rows = _load_course_rows()
+    results = [_process_user(user_id, course_rows=course_rows) for user_id in user_ids]
     return {
         "message": "Participant processing completed.",
         "total_participants": len(results),
