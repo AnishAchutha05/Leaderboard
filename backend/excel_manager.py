@@ -2,13 +2,9 @@
 from pathlib import Path
 import re
 from urllib.parse import urlparse
-from openpyxl import load_workbook, Workbook
-from openpyxl.styles import Font, PatternFill, Alignment
-from openpyxl.utils import get_column_letter
+from openpyxl import load_workbook
 
 
-DATA_DIR = Path("data")
-RESULTS_FILE = DATA_DIR / "results.xlsx"
 EMAIL_PATTERN = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 
 
@@ -140,110 +136,3 @@ def load_participants(file_path: str, sheet_name: str | None = None) -> list[dic
 
 
 load_participants.last_issues = []
-
-
-def save_results(
-    participants: list[dict],
-    file_path: str = str(RESULTS_FILE)
-) -> None:
-    """Save participant progress and individual lab results to Excel."""
-
-    path = Path(file_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    workbook = Workbook()
-
-    summary = workbook.active
-    summary.title = "Participant Summary"
-
-    summary_headers = [
-        "Name",
-        "Email",
-        "Profile URL",
-        "Completed Labs",
-        "Pending Labs",
-        "Progress (%)",
-        "Earned Credits",
-        "Total Credits",
-        "Status",
-        "Last Checked"
-    ]
-
-    summary.append(summary_headers)
-
-    details = workbook.create_sheet("Lab Details")
-
-    details.append([
-        "Participant",
-        "Email",
-        "Lab Name",
-        "Required Badge",
-        "Earned Badge",
-        "Earned Date",
-        "Credits",
-        "Status",
-        "Match Type",
-        "Match Score"
-    ])
-
-    for participant in participants:
-        progress = participant.get("progress", {})
-
-        summary.append([
-            participant.get("name"),
-            participant.get("email"),
-            participant.get("profile_url"),
-            progress.get("completed_labs", 0),
-            progress.get("pending_labs", 0),
-            progress.get("progress_percentage", 0),
-            progress.get("earned_credits", 0),
-            progress.get("total_credits", 0),
-            participant.get("status", "Not Checked"),
-            participant.get("last_checked")
-        ])
-
-        for lab in progress.get("labs", []):
-            details.append([
-                participant.get("name"),
-                participant.get("email"),
-                lab.get("lab_name"),
-                lab.get("badge_name"),
-                lab.get("earned_badge"),
-                lab.get("earned_date"),
-                lab.get("credits"),
-                lab.get("status"),
-                lab.get("match_type"),
-                lab.get("match_score")
-            ])
-
-    # Apply basic formatting.
-    for worksheet in workbook.worksheets:
-        worksheet.freeze_panes = "A2"
-        worksheet.auto_filter.ref = worksheet.dimensions
-
-        for cell in worksheet[1]:
-            cell.font = Font(bold=True, color="FFFFFF")
-            cell.fill = PatternFill(
-                start_color="1A73E8",
-                end_color="1A73E8",
-                fill_type="solid"
-            )
-            cell.alignment = Alignment(horizontal="center")
-
-        for column_cells in worksheet.columns:
-            max_length = max(
-                len(str(cell.value or ""))
-                for cell in column_cells
-            )
-
-            column_letter = get_column_letter(
-                column_cells[0].column
-            )
-
-            worksheet.column_dimensions[column_letter].width = min(
-                max_length + 3,
-                55
-            )
-
-    workbook.save(path)
-    workbook.close()

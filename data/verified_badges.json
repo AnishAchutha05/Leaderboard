@@ -1,0 +1,51 @@
+[
+  {
+    "badge_id": "19443837",
+    "badge_name": "The Basics of Google Cloud Compute",
+    "badge_url": "https://www.skills.google/public_profiles/3d4d0e0a-c030-4318-8b9f-ab481356e2cb/badges/19443837",
+    "earned_at": "Oct 23, 2025",
+    "category": "Skill"
+  },
+  {
+    "badge_id": "19438545",
+    "badge_name": "Implement Cloud Storage and Data Protection Solutions",
+    "badge_url": "https://www.skills.google/public_profiles/3d4d0e0a-c030-4318-8b9f-ab481356e2cb/badges/19438545",
+    "earned_at": "Oct 23, 2025",
+    "category": "Skill"
+  },
+  {
+    "badge_id": "19497463",
+    "badge_name": "Develop with Apps Script and AppSheet",
+    "badge_url": "https://www.skills.google/public_profiles/3d4d0e0a-c030-4318-8b9f-ab481356e2cb/badges/19497463",
+    "earned_at": "Oct 24, 2025",
+    "category": "Skill"
+  },
+  {
+    "badge_id": "29531568",
+    "badge_name": "The Basics of Google Cloud Compute",
+    "badge_url": "https://www.skills.google/public_profiles/a0fffaa7-e098-4212-8653-eacc8696cdbc/badges/29531568",
+    "earned_at": "Nov 10, 2026",
+    "category": "Skill"
+  },
+  {
+    "badge_id": "26852208",
+    "badge_name": "Google Cloud Computing Foundations: Cloud Computing Fundamentals",
+    "badge_url": "https://www.skills.google/public_profiles/a0fffaa7-e098-4212-8653-eacc8696cdbc/badges/26852208",
+    "earned_at": "Aug 16, 2026",
+    "category": "Completion"
+  },
+  {
+    "badge_id": "27140846",
+    "badge_name": "Google Cloud Computing Foundations: Infrastructure in Google Cloud",
+    "badge_url": "https://www.skills.google/public_profiles/a0fffaa7-e098-4212-8653-eacc8696cdbc/badges/27140846",
+    "earned_at": "Aug 23, 2026",
+    "category": "Completion"
+  },
+  {
+    "badge_id": "27165535",
+    "badge_name": "Google Cloud Computing Foundations: Networking & Security in Google Cloud",
+    "badge_url": "https://www.skills.google/public_profiles/a0fffaa7-e098-4212-8653-eacc8696cdbc/badges/27165535",
+    "earned_at": "Aug 23, 2026",
+    "category": "Completion"
+  }
+]

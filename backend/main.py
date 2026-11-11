@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from pathlib import Path
 import re
+import tempfile
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
@@ -49,20 +50,41 @@ COURSE_FILE = next(
     ) if path.exists()),
     DATA_DIR / "GCP_Labs_Courses_Professional.xlsx",
 )
-PARTICIPANT_FILE = next(
-    (path for path in (
-        DATA_DIR / "clean_participants.xlsx",
-        DATA_DIR / "participants.xlsx",
-    ) if path.exists()),
-    DATA_DIR / "clean_participants.xlsx",
-)
-RESULTS_FILE = DATA_DIR / "results.xlsx"
+PARTICIPANT_FILE = DATA_DIR / "clean_participants.xlsx"
 PARTICIPANT_SHEET = "Clean Participants"
 COURSE_SHEET = "GCP Labs & Courses"
 
 
 def _normalize_text(value: str | None) -> str:
     return " ".join((value or "").casefold().split())
+
+
+COURSE_BADGE_ALIASES = {
+    _normalize_text("The Basics of Google Cloud Compute: Challenge Lab"): (
+        "The Basics of Google Cloud Compute",
+    ),
+    _normalize_text("Develop with Apps Script and AppSheet: Challenge Lab"): (
+        "Develop with Apps Script and AppSheet",
+    ),
+}
+
+
+def _expected_badge_names(course_row: dict) -> set[str]:
+    course_name = _normalize_text(course_row.get("lab_name"))
+    aliases = COURSE_BADGE_ALIASES.get(course_name)
+    if aliases:
+        return {_normalize_text(name) for name in aliases}
+    badge_name = course_row.get("badge_name")
+    return {_normalize_text(badge_name or course_row.get("lab_name"))}
+
+
+def _course_for_badge(course_rows: list[dict], badge_name: str) -> dict | None:
+    normalized_name = _normalize_text(badge_name)
+    matches = [
+        row for row in course_rows
+        if normalized_name in _expected_badge_names(row)
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _normalize_profile_url(value: str) -> str:
@@ -121,31 +143,31 @@ def _import_users(db: Session, rows: list[dict]) -> dict:
     return {"inserted": inserted, "updated": updated, "skipped": len(invalid), "issues": invalid}
 
 
-def _find_course_for_badge(course_rows: list[dict], badge_name: str) -> dict | None:
-    exact = _normalize_text(badge_name)
-    matches = [row for row in course_rows if _normalize_text(row.get("lab_name")) == exact]
-    return matches[0] if len(matches) == 1 else None
-
-
 def _import_course_rows(db: Session, course_rows: list[dict]) -> dict:
     imported = 0
     unresolved = []
     known_badges = db.scalars(select(Badge)).all()
     for row in course_rows:
-        badge_name = row.get("badge_name") or row["lab_name"]
-        matches = [badge for badge in known_badges
-                   if _normalize_text(badge.name) == _normalize_text(badge_name)]
+        expected_names = _expected_badge_names(row)
+        matches = [badge for badge in known_badges if _normalize_text(badge.name) in expected_names]
         if len(matches) != 1:
-            unresolved.append({
-                "row": row.get("source_row"),
-                "name": row["lab_name"],
-                "reason": (
-                    "No unique exact-name match to a badge ID scraped from a public profile."
-                    if matches else
-                    "Workbook contains no Google badge ID; awaiting an exact name match to a badge ID scraped from a public profile."
-                ),
-            })
-            continue
+            # Multiple actual issuance IDs can refer to the same verified badge
+            # title across profiles. They are equivalent for this one lab's
+            # display association; retain a stable canonical representative.
+            normalized_names = {_normalize_text(badge.name) for badge in matches}
+            if matches and len(normalized_names) == 1:
+                matches.sort(key=lambda badge: badge.id)
+            else:
+                unresolved.append({
+                    "row": row.get("source_row"),
+                    "name": row["lab_name"],
+                    "reason": (
+                        "No unique exact-name match to a badge ID scraped from a public profile."
+                        if matches else
+                        "No verified badge ID yet for the course's exact badge name/approved alias."
+                    ),
+                })
+                continue
         badge = matches[0]
 
         lab = db.scalar(select(Lab).where(Lab.url == (row.get("lab_url") or "")))
@@ -158,20 +180,53 @@ def _import_course_rows(db: Session, course_rows: list[dict]) -> dict:
                 badge_id=badge.id,
             )
             db.add(lab)
-        elif lab.badge_id == badge.id:
+        else:
+            # Keep the existing, verified FK association if another profile's
+            # actual badge issuance ID is encountered for the same badge name.
             lab.name = row["lab_name"]
             lab.item_type = row["item_type"]
             lab.total_credits = row["credits"]
-        else:
-            unresolved.append({
-                "row": row.get("source_row"),
-                "name": row["lab_name"],
-                "reason": "URL already belongs to a different badge; association left unchanged.",
-            })
-            continue
+            if _normalize_text(lab.badge.name) not in expected_names:
+                lab.badge_id = badge.id
         imported += 1
     db.flush()
     return {"imported": imported, "unresolved": unresolved}
+
+
+def _import_verified_badges(db: Session, records: list[dict]) -> dict:
+    inserted = updated = 0
+    rejected = []
+    for record in records:
+        badge_id = str(record.get("badge_id") or "").strip()
+        badge_name = str(record.get("badge_name") or "").strip()
+        badge_url = str(record.get("badge_url") or "").strip()
+        parsed_url = urlparse(badge_url)
+        actual_id = re.search(r"/badges/([A-Za-z0-9_-]+)/?$", parsed_url.path)
+        if (
+            not badge_id or not badge_name or not actual_id
+            or actual_id.group(1) != badge_id
+            or parsed_url.scheme != "https"
+            or parsed_url.netloc.lower() not in {"skills.google", "www.skills.google"}
+        ):
+            rejected.append({"badge_id": badge_id or None, "name": badge_name or None,
+                             "reason": "Badge ID and URL did not verify against an actual Google Skills badge link."})
+            continue
+
+        category = record.get("category")
+        if category not in {"Completion", "Skill"}:
+            rejected.append({"badge_id": badge_id, "name": badge_name,
+                             "reason": "Missing valid category from the authoritative course catalogue."})
+            continue
+        badge = db.get(Badge, badge_id)
+        if badge is None:
+            db.add(Badge(id=badge_id, name=badge_name, category=category))
+            inserted += 1
+        else:
+            badge.name = badge_name
+            badge.category = category
+            updated += 1
+    db.flush()
+    return {"inserted": inserted, "updated": updated, "rejected": rejected}
 
 
 def _date_value(value):
@@ -202,12 +257,21 @@ def _serialize_users(db: Session) -> list[dict]:
         completions = [completion for completion in user.completions if completion.is_completed]
         labs = []
         for lab in labs_by_id:
-            completion = next((item for item in completions if item.badge_id == lab.badge_id), None)
+            # Badge IDs are issuance IDs and differ between learners. The
+            # verified association for a participant is the completion's FK
+            # to this lab, not equality with the lab's canonical badge ID.
+            completion = next((item for item in completions if item.lab_id == lab.id), None)
             labs.append({
                 "lab_name": lab.name,
+                "name": lab.name,
                 "badge_name": lab.badge.name,
+                "badge_id": lab.badge.id,
                 "lab_url": lab.url,
+                "url": lab.url,
                 "credits": lab.total_credits,
+                "total_credits": lab.total_credits,
+                "item_type": lab.item_type,
+                "category": "Completion" if lab.item_type == "Course" else "Skill",
                 "status": "Done" if completion else "Pending",
                 "earned_badge": lab.badge.name if completion else None,
                 "earned_date": completion.earned_at.isoformat() if completion and completion.earned_at else None,
@@ -257,14 +321,18 @@ def _process_user(user_id: int) -> dict:
 
         with SessionLocal.begin() as db:
             user = db.get(User, user_id)
+            seen_badge_ids = set()
             for earned in earned_badges:
                 badge_id = str(earned.get("badge_id") or "").strip()
                 badge_name = str(earned.get("badge_name") or "").strip()
                 if not badge_id or not badge_name:
                     unresolved.append({"badge": badge_name or None, "reason": "Scraper found no actual Google badge ID or name."})
                     continue
+                if badge_id in seen_badge_ids:
+                    continue
+                seen_badge_ids.add(badge_id)
 
-                course_row = _find_course_for_badge(course_rows, badge_name)
+                course_row = _course_for_badge(course_rows, badge_name)
                 category = (course_row or {}).get("category") or "Unclassified"
                 badge = db.get(Badge, badge_id)
                 if badge is None:
@@ -278,7 +346,8 @@ def _process_user(user_id: int) -> dict:
                         badge.category = category
 
                 # The workbook does not supply badge IDs. Only create a lab
-                # relation when its title exactly matches a real scraped badge.
+                # relation when its title exactly matches a real scraped badge
+                # or one of the explicit Challenge Lab title aliases above.
                 if course_row is not None:
                     lab = db.scalar(select(Lab).where(Lab.url == (course_row.get("lab_url") or "")))
                     if lab is None:
@@ -289,8 +358,8 @@ def _process_user(user_id: int) -> dict:
                         )
                         db.add(lab)
                         db.flush()
-                    elif lab.badge_id != badge.id:
-                        unresolved.append({"badge": badge_name, "reason": "Exact-name lab URL is already associated with another badge."})
+                    elif _normalize_text(lab.badge.name) not in _expected_badge_names(course_row):
+                        unresolved.append({"badge": badge_name, "reason": "Lab URL is associated with a different verified badge."})
                         continue
 
                     completion = db.scalar(select(Completion).where(
@@ -384,12 +453,13 @@ async def upload_participants(file: UploadFile = File(...)):
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    PARTICIPANT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PARTICIPANT_FILE.write_bytes(content)
-    try:
-        records = load_participants(str(PARTICIPANT_FILE), sheet_name=PARTICIPANT_SHEET)
-    except Exception as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+    with tempfile.NamedTemporaryFile(suffix=".xlsx") as temp_file:
+        temp_file.write(content)
+        temp_file.flush()
+        try:
+            records = load_participants(temp_file.name, sheet_name=PARTICIPANT_SHEET)
+        except Exception as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
     with SessionLocal.begin() as db:
         result = _import_users(db, records)
     return {"message": "Participant workbook imported.", "total_participants": len(records), **result,
@@ -401,8 +471,11 @@ def get_course():
     with SessionLocal() as db:
         labs = db.scalars(select(Lab).options(joinedload(Lab.badge)).order_by(Lab.id)).unique().all()
         return {"total_labs": len(labs), "labs": [
-            {"lab_name": lab.name, "badge_name": lab.badge.name, "lab_url": lab.url,
-             "credits": lab.total_credits, "item_type": lab.item_type}
+            {"lab_name": lab.name, "name": lab.name, "badge_name": lab.badge.name,
+             "badge_id": lab.badge.id,
+             "lab_url": lab.url, "url": lab.url, "credits": lab.total_credits,
+             "total_credits": lab.total_credits, "item_type": lab.item_type,
+             "category": "Completion" if lab.item_type == "Course" else "Skill"}
             for lab in labs
         ]}
 
@@ -433,13 +506,6 @@ def process_all_participants():
 @app.post("/api/participants/{participant_index}/refresh")
 def refresh_participant(participant_index: int):
     return _process_user(participant_index)
-
-
-@app.get("/api/results")
-def get_results():
-    if not RESULTS_FILE.exists():
-        raise HTTPException(status_code=404, detail="Results are not available yet.")
-    return {"message": "Results workbook is available.", "file": str(RESULTS_FILE)}
 
 
 @app.get("/api/leaderboard")

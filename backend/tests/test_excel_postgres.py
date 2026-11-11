@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,6 +14,8 @@ from backend.database.database import SessionLocal
 from backend.database.models import Badge, Completion, Lab, ScrapeLog, User
 from backend.excel_manager import load_participants
 from backend.main import _import_users, _process_user
+from backend.main import _import_course_rows, _import_verified_badges, _serialize_users, get_course
+from backend.leaderboard import get_leaderboard
 from backend.participant_manager import validate_profile_url
 from backend.scraper import badge_from_link
 
@@ -194,6 +197,113 @@ class PostgresIntegrationTests(unittest.TestCase):
             self.assertEqual(log.status, "Failed")
             self.assertIn("simulated scrape failure", log.error_message)
         self.assertEqual(result["status"], "Failed")
+
+    def test_six_authoritative_courses_and_two_real_profile_fixtures(self):
+        evidence = json.loads((DATA_DIR / "verified_badges.json").read_text(encoding="utf-8"))
+        courses = parse_course(str(DATA_DIR / "course.xlsx"), "GCP Labs & Courses")
+        self.assertEqual(len(courses), 6)
+        self.assertEqual([row["lab_name"] for row in courses], [
+            "Google Cloud Computing Foundations: Cloud Computing Fundamentals",
+            "The Basics of Google Cloud Compute: Challenge Lab",
+            "Google Cloud Computing Foundations: Infrastructure in Google Cloud",
+            "Implement Cloud Storage and Data Protection Solutions",
+            "Google Cloud Computing Foundations: Networking & Security in Google Cloud",
+            "Develop with Apps Script and AppSheet: Challenge Lab",
+        ])
+        self.assertEqual([row["lab_url"] for row in courses], [
+            "https://www.skills.google/course_templates/153",
+            "https://www.skills.google/focuses/65384",
+            "https://www.skills.google/course_templates/154",
+            "https://www.skills.google/focuses/62706",
+            "https://www.skills.google/course_templates/155",
+            "https://www.skills.google/focuses/66584",
+        ])
+        self.assertEqual([row["credits"] for row in courses], [5, 1, 6, 1, 16, 1])
+        self.assertEqual([row["item_type"] for row in courses], [
+            "Course", "Challenge Lab", "Course", "Challenge Lab", "Course", "Challenge Lab",
+        ])
+        self.assertEqual([row["category"] for row in courses], [
+            "Completion", "Skill", "Completion", "Skill", "Completion", "Skill",
+        ])
+
+        profile_one_ids = {"19443837", "19438545", "19497463"}
+        profile_two_ids = {"29531568", "26852208", "27140846", "27165535"}
+        profile_one_badges = [item for item in evidence if item["badge_id"] in profile_one_ids]
+        profile_two_badges = [item for item in evidence if item["badge_id"] in profile_two_ids]
+        self.assertEqual({item["badge_id"] for item in profile_one_badges}, profile_one_ids)
+        self.assertEqual({item["badge_id"] for item in profile_two_badges}, profile_two_ids)
+
+        with SessionLocal.begin() as db:
+            badge_import = _import_verified_badges(db, evidence)
+            course_import = _import_course_rows(db, courses)
+            first = User(name="Profile One Fixture", email=None,
+                         public_profile_url="https://www.skills.google/public_profiles/3d4d0e0a-c030-4318-8b9f-ab481356e2cb")
+            second = User(name="Profile Two Fixture", email=None,
+                          public_profile_url="https://www.skills.google/public_profiles/a0fffaa7-e098-4212-8653-eacc8696cdbc")
+            db.add_all([first, second])
+            db.flush()
+            first_id, second_id = first.id, second.id
+
+        self.assertEqual(badge_import["inserted"], 7)  # two genuine issuances for the shared badge
+        self.assertEqual(badge_import["rejected"], [])
+        self.assertEqual(course_import["imported"], 6)
+        self.assertEqual(course_import["unresolved"], [])
+
+        with patch("backend.main.scrape_badges", side_effect=[profile_one_badges, profile_two_badges]):
+            first_result = _process_user(first_id)
+            second_result = _process_user(second_id)
+        self.assertEqual(first_result["status"], "Success")
+        self.assertEqual(second_result["status"], "Success")
+
+        # A duplicated badge link in one scrape must not create another completion.
+        with patch("backend.main.scrape_badges", return_value=profile_one_badges + profile_one_badges):
+            duplicate_scrape = _process_user(first_id)
+        self.assertEqual(duplicate_scrape["status"], "Success")
+
+        with SessionLocal() as db:
+            courses_after = db.scalars(select(Lab).order_by(Lab.id)).all()
+            self.assertEqual(len(courses_after), 6)
+            self.assertEqual({lab.url for lab in courses_after}, {row["lab_url"] for row in courses})
+            self.assertEqual(db.scalar(select(func.count()).select_from(Completion).where(Completion.user_id == first_id)), 3)
+            self.assertEqual(db.scalar(select(func.count()).select_from(Completion).where(Completion.user_id == second_id)), 4)
+            first_records = {record["name"]: record for record in _serialize_users(db) if record["participant_index"] in {first_id, second_id}}
+            self.assertEqual(db.scalar(select(func.count()).select_from(Completion).where(Completion.user_id == first_id)), 3)
+            course_api = get_course()
+            self.assertEqual(course_api["total_labs"], 6)
+            self.assertEqual([row["lab_url"] for row in course_api["labs"]], [row["lab_url"] for row in courses])
+
+        first_status = {lab["lab_name"]: lab["status"] for lab in first_records["Profile One Fixture"]["progress"]["labs"]}
+        second_status = {lab["lab_name"]: lab["status"] for lab in first_records["Profile Two Fixture"]["progress"]["labs"]}
+        self.assertEqual(sum(status == "Done" for status in first_status.values()), 3)
+        self.assertEqual(sum(status == "Done" for status in second_status.values()), 4)
+        self.assertEqual(first_status["The Basics of Google Cloud Compute: Challenge Lab"], "Done")
+        self.assertEqual(first_status["Implement Cloud Storage and Data Protection Solutions"], "Done")
+        self.assertEqual(first_status["Develop with Apps Script and AppSheet: Challenge Lab"], "Done")
+        self.assertEqual(first_status["Google Cloud Computing Foundations: Cloud Computing Fundamentals"], "Pending")
+        self.assertEqual(first_status["Google Cloud Computing Foundations: Infrastructure in Google Cloud"], "Pending")
+        self.assertEqual(first_status["Google Cloud Computing Foundations: Networking & Security in Google Cloud"], "Pending")
+        self.assertEqual(second_status["The Basics of Google Cloud Compute: Challenge Lab"], "Done")
+        self.assertEqual(second_status["Google Cloud Computing Foundations: Cloud Computing Fundamentals"], "Done")
+        self.assertEqual(second_status["Google Cloud Computing Foundations: Infrastructure in Google Cloud"], "Done")
+        self.assertEqual(second_status["Google Cloud Computing Foundations: Networking & Security in Google Cloud"], "Done")
+        self.assertEqual(second_status["Implement Cloud Storage and Data Protection Solutions"], "Pending")
+        self.assertEqual(second_status["Develop with Apps Script and AppSheet: Challenge Lab"], "Pending")
+        board = get_leaderboard([first_records["Profile One Fixture"], first_records["Profile Two Fixture"]])
+        self.assertEqual(board["total_participants"], 2)
+        self.assertEqual({row["name"]: row["completed_badges"] for row in board["leaderboard"]}, {
+            "Profile One Fixture": 3,
+            "Profile Two Fixture": 4,
+        })
+
+        with SessionLocal.begin() as db:
+            badge_import_again = _import_verified_badges(db, evidence)
+            course_import_again = _import_course_rows(db, courses)
+        self.assertEqual(badge_import_again["inserted"], 0)
+        self.assertEqual(course_import_again["imported"], 6)
+        with SessionLocal() as db:
+            self.assertEqual(db.scalar(select(func.count()).select_from(Badge)), 7)
+            self.assertEqual(db.scalar(select(func.count()).select_from(Lab)), 6)
+            self.assertEqual(db.scalar(select(func.count()).select_from(Completion)), 7)
 
 
 if __name__ == "__main__":

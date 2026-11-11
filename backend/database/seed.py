@@ -19,7 +19,7 @@ from .database import SessionLocal
 from .models import Badge, Completion, EventStat, Lab, ScrapeLog, User
 from ..course_parser import parse_course
 from ..excel_manager import load_participants
-from ..main import _import_course_rows, _import_users, _process_user
+from ..main import _import_course_rows, _import_users, _import_verified_badges, _process_user
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
@@ -30,6 +30,7 @@ COURSE_FILE_CANDIDATES = (
 )
 PARTICIPANT_SHEET = "Clean Participants"
 COURSE_SHEET = "GCP Labs & Courses"
+VERIFIED_BADGES_FILE = DATA_DIR / "verified_badges.json"
 ADVISORY_LOCK_KEY = 731_804_161_2026
 
 
@@ -41,6 +42,19 @@ def _course_file() -> Path:
         "Course workbook not found. Expected one of: "
         + ", ".join(str(path) for path in COURSE_FILE_CANDIDATES)
     )
+
+
+def _read_verified_badge_evidence(path: Path = VERIFIED_BADGES_FILE) -> list[dict]:
+    """Load reviewed profile output; every ID and URL is checked before insert."""
+    import json
+
+    if not path.exists():
+        return []
+    with path.open(encoding="utf-8") as file:
+        records = json.load(file)
+    if not isinstance(records, list):
+        raise ValueError(f"Verified badge evidence must be a JSON array: {path}")
+    return records
 
 
 def _require_migrations_current(connection) -> None:
@@ -78,6 +92,7 @@ def seed_database(*, dry_run: bool = False, scrape: bool = False) -> dict[str, A
     participant_rows = load_participants(str(PARTICIPANTS_FILE), PARTICIPANT_SHEET)
     course_path = _course_file()
     course_rows = parse_course(str(course_path), sheet_name=COURSE_SHEET)
+    verified_badges = _read_verified_badge_evidence()
 
     session = SessionLocal()
     try:
@@ -86,6 +101,7 @@ def seed_database(*, dry_run: bool = False, scrape: bool = False) -> dict[str, A
         session.execute(text("SELECT pg_advisory_xact_lock(:lock_key)"), {"lock_key": ADVISORY_LOCK_KEY})
         before = _counts(session)
 
+        badge_result = _import_verified_badges(session, verified_badges)
         user_result = _import_users(session, participant_rows)
         course_result = _import_course_rows(session, course_rows)
         available_badges = session.scalar(select(func.count()).select_from(Badge)) or 0
@@ -93,6 +109,8 @@ def seed_database(*, dry_run: bool = False, scrape: bool = False) -> dict[str, A
             "participants_read": len(participant_rows),
             "participant_issues": load_participants.last_issues,
             "users": user_result,
+            "verified_badges_read": len(verified_badges),
+            "verified_badges": badge_result,
             "courses_read": len(course_rows),
             "labs_imported": course_result["imported"],
             "unresolved_lab_mappings": course_result["unresolved"],
