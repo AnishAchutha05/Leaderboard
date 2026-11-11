@@ -141,11 +141,11 @@ export default function Page() {
           <section className="flex items-end justify-between gap-6 pb-6 pt-8 sm:pb-8 sm:pt-12">
             <div className="min-w-0">
               <p className="text-[11px] font-bold uppercase tracking-[0.18em] text-faint">
-                Google Cloud Skills Boost · Live
+                CloudMAX · Live
               </p>
               <h1 className="mt-3 text-[64px] font-bold leading-[0.9] tracking-tighter sm:text-[104px] lg:text-[136px]">
-                <span className="sr-only">Google Skills Leaderboard </span>
-                <span aria-hidden>skills<span className="text-accent">.</span></span>
+                <span className="sr-only">CloudMAX Leaderboard </span>
+                <span aria-hidden>CloudMAX<span className="text-accent">.</span></span>
               </h1>
               <p className="mt-4 max-w-md text-sm text-soft sm:text-base">
                 Every lab finished, every badge earned, ranked live. Tap anyone to see exactly where they stand.

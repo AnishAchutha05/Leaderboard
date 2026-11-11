@@ -18,7 +18,7 @@ export default function Header({ lastUpdated }: Props) {
           className="h-10 w-[72px] shrink-0 object-contain sm:h-11 sm:w-[78px]"
         />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold leading-tight sm:text-base">Google Skills Leaderboard</p>
+          <p className="truncate text-sm font-semibold leading-tight sm:text-base">CloudMAX Leaderboard</p>
           <p className="truncate text-[11px] leading-tight text-faint sm:text-xs">
             Track. Learn. Achieve.<span className="hidden sm:inline"> · GDG on Campus · JSSATE-B</span>
           </p>

@@ -41,7 +41,7 @@ export default function ParticipantDetails({ participant, badges, onClose }: Pro
               {participant.email && <a href={`mailto:${participant.email}`} className="inline-flex items-center gap-1.5 truncate text-soft hover:text-ink hover:underline"><Mail className="h-3.5 w-3.5 shrink-0" aria-hidden /><span className="truncate">{participant.email}</span></a>}
               {participant.profileUrl && (
                 <a href={participant.profileUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent-deep hover:underline">
-                  <ExternalLink className="h-3.5 w-3.5 shrink-0" aria-hidden />Google Skills profile
+                  <ExternalLink className="h-3.5 w-3.5 shrink-0" aria-hidden />CloudMAX profile
                 </a>
               )}
             </div>

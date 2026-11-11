@@ -2,8 +2,8 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Google Skills Leaderboard · GDG on Campus JSSATE-B",
-  description: "Live Google Cloud Skills Boost badge leaderboard. Track. Learn. Achieve.",
+  title: "CloudMAX Leaderboard · GDG on Campus JSSATE-B",
+  description: "Live CloudMAX badge leaderboard. Track. Learn. Achieve.",
 };
 
 export const viewport: Viewport = { width: "device-width", initialScale: 1 };
