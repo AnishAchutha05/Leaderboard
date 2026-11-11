@@ -4,10 +4,16 @@ export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:800
 
 interface ApiCourseLab {
   lab_name: string;
+  name?: string;
   badge_name: string | null;
+  badge_id: string;
+  badge_url?: string | null;
   lab_url: string | null;
+  url?: string;
   credits: number;
+  total_credits?: number;
   item_type: "Course" | "Challenge Lab";
+  category: "Completion" | "Skill";
 }
 
 interface ApiCourseResponse {
@@ -18,7 +24,13 @@ interface ApiCourseResponse {
 interface ApiProgressLab {
   lab_name: string;
   badge_name: string;
+  badge_id?: string;
+  badge_url?: string | null;
   lab_url: string | null;
+  item_type?: "Course" | "Challenge Lab";
+  credits?: number;
+  total_credits?: number;
+  category?: "Completion" | "Skill";
   status: "Done" | "Pending";
   earned_badge: string | null;
   earned_date: string | null;
@@ -27,6 +39,7 @@ interface ApiProgressLab {
 interface ApiCompletionBadge {
   badge_id: string;
   badge_name: string;
+  badge_url?: string | null;
   date: string | null;
   status: "Done";
 }
@@ -106,59 +119,38 @@ function readLeaderboard(value: unknown): ApiLeaderboardResponse {
   };
 }
 
-function buildBadgeCatalog(labs: ApiCourseLab[], rows: ApiParticipant[]): Badge[] {
-  const idsByName = new Map<string, Set<string>>();
-  for (const participant of rows) {
-    for (const earned of participant.badges ?? []) {
-      const name = normalizeName(earned.badge_name);
-      if (!name || !earned.badge_id) continue;
-      const ids = idsByName.get(name) ?? new Set<string>();
-      ids.add(earned.badge_id);
-      idsByName.set(name, ids);
-    }
-  }
-
-  const catalog = new Map<string, Badge>();
-  for (const lab of labs) {
-    const name = lab.badge_name?.trim();
-    if (!name) continue;
-    const matchingIds = idsByName.get(normalizeName(name));
-    const actualId = matchingIds?.size === 1 ? [...matchingIds][0] : undefined;
-    // The verified /api/course JSON has no badge_id. Use the actual ID if one
-    // is supplied by a participant completion; otherwise the backend lab URL
-    // is only a local React/matching key, never presented as a Google badge ID.
-    const key = actualId ?? (lab.lab_url ? `lab:${lab.lab_url}` : `name:${normalizeName(name)}`);
-    if (!catalog.has(key)) catalog.set(key, { key, id: actualId ?? key, name, url: lab.lab_url ?? undefined });
-  }
-
-  // Include genuine completed badge rows returned by the backend even if no
-  // matching course row was returned. These IDs come directly from badges[].
-  for (const participant of rows) {
-    for (const earned of participant.badges ?? []) {
-      if (!earned.badge_id || !earned.badge_name) continue;
-      const alreadyPresent = [...catalog.values()].some(
-        (badge) => badge.id === earned.badge_id || normalizeName(badge.name) === normalizeName(earned.badge_name),
-      );
-      if (!alreadyPresent) {
-        catalog.set(earned.badge_id, { key: earned.badge_id, id: earned.badge_id, name: earned.badge_name });
-      }
-    }
-  }
-  return [...catalog.values()];
+function buildBadgeCatalog(labs: ApiCourseLab[]): Badge[] {
+  return labs.map((lab) => {
+    const url = lab.lab_url ?? lab.url ?? undefined;
+    const name = (lab.name ?? lab.lab_name).trim();
+    return {
+      key: url ?? `course:${normalizeName(name)}`,
+      name,
+      itemType: lab.item_type,
+      credits: Number(lab.total_credits ?? lab.credits),
+      category: lab.category,
+      url,
+      badgeId: lab.badge_id,
+      badgeUrl: lab.badge_url ?? undefined,
+    };
+  });
 }
 
 function participantBadges(row: ApiParticipant, catalog: Badge[]): BadgeStatus[] {
   const progressLabs = row.progress?.labs ?? [];
   const completions = row.badges ?? [];
   return catalog.map((badge) => {
-    const completion = completions.find(
-      (entry) => entry.badge_id === badge.id || normalizeName(entry.badge_name) === normalizeName(badge.name),
-    );
     const lab = progressLabs.find(
       (entry) => (entry.lab_url && entry.lab_url === badge.url)
-        || normalizeName(entry.badge_name) === normalizeName(badge.name),
+        || (!entry.lab_url && normalizeName(entry.lab_name) === normalizeName(badge.name)),
     );
-    const earned = Boolean(completion) || lab?.status === "Done";
+    // Per-user completions carry issuance-specific Google badge IDs. The
+    // persisted completion.lab_id is authoritative for the catalogue row.
+    const completion = completions.find(
+      (entry) => entry.badge_id === lab?.badge_id
+        || normalizeName(entry.badge_name) === normalizeName(lab?.earned_badge ?? ""),
+    );
+    const earned = lab?.status === "Done";
     return {
       badgeKey: badge.key,
       earned,
@@ -197,7 +189,7 @@ export async function fetchLeaderboardData(): Promise<LeaderboardData> {
   const course = readCourse(courseRaw);
   const leaderboard = readLeaderboard(leaderboardRaw);
   const rows = expectArray<ApiParticipant>(leaderboard.leaderboard, "leaderboard");
-  const badges = buildBadgeCatalog(course.labs, rows);
+  const badges = buildBadgeCatalog(course.labs);
   const participants = buildParticipants(rows, badges);
   const updatedAt = rows
     .map((row) => row.last_checked)

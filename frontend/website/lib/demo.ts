@@ -1,6 +1,6 @@
 import type { Badge, LeaderboardData, Participant } from "./types";
 
-/* PREVIEW ONLY. Used when the API is unreachable, and always labelled "Demo data" in the UI. */
+/* PREVIEW ONLY. Never used as an automatic fallback for backend errors. */
 
 const BADGE_NAMES = [
   "Get Started with Cloud Storage",
@@ -26,22 +26,29 @@ const NAMES = [
 ];
 
 export function buildDemo(): LeaderboardData {
-  const badges: Badge[] = BADGE_NAMES.map((name, i) => ({ id: `b${i}`, name, url: "https://www.cloudskillsboost.google/" }));
+  const badges: Badge[] = BADGE_NAMES.map((name, i) => ({
+    key: `demo-badge-${i}`,
+    name,
+    itemType: "Course",
+    credits: 0,
+    category: "Completion",
+    url: "https://www.cloudskillsboost.google/",
+  }));
   const counts = [12, 12, 11, 10, 10, 9, 9, 8, 8, 7, 7, 6, 6, 6, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 2, 1, 1, 1, 0, 0];
 
   const participants: Participant[] = NAMES.map((name, i) => {
     const completed = counts[i];
-    const map: Participant["badges"] = {};
+    const map: Participant["badges"] = [];
     badges.forEach((b, j) => {
       // earn a deterministic subset of `completed` badges
       const earned = (j + i * 5) % badges.length < completed;
       const day = 1 + ((i * 3 + j * 2) % 27);
-      map[b.id] = { earned, date: earned ? `2026-11-${String(day).padStart(2, "0")}` : null };
+      map.push({ badgeKey: b.key, earned, earnedDate: earned ? `2026-11-${String(day).padStart(2, "0")}` : undefined });
     });
-    const earnedCount = Object.values(map).filter((b) => b.earned).length;
+    const earnedCount = map.filter((b) => b.earned).length;
     return {
       key: `demo-${i}`,
-      index: null,
+      index: undefined,
       rank: i + 1,
       name,
       email: `${name.toLowerCase().replace(/\s+/g, ".")}@example.com`,
@@ -53,5 +60,5 @@ export function buildDemo(): LeaderboardData {
     };
   });
 
-  return { badges, participants, lastUpdated: new Date().toISOString(), demo: true };
+  return { badges, participants, updatedAt: new Date().toISOString(), isDemo: true };
 }

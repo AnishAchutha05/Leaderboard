@@ -53,6 +53,8 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
+    // Loading remote API data is an effect; state updates occur after the fetch settles.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
 
@@ -75,7 +77,7 @@ export default function Page() {
     }
   }, [refreshing, showToast]);
 
-  const all = data?.participants ?? [];
+  const all = useMemo(() => data?.participants ?? [], [data]);
   const sliced = useMemo(() => filter === "all" ? all : all.slice(0, Number(filter)), [all, filter]);
   const visible = useMemo(() => {
     const value = query.trim().toLocaleLowerCase();

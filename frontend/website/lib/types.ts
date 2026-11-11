@@ -1,12 +1,17 @@
 export interface Badge {
-  /** Stable UI key. Uses a Google badge ID when supplied, otherwise a source lab URL key. */
+  /** Stable UI key for the course/lab row. */
   key: string;
-  id: string;
   name: string;
+  itemType: "Course" | "Challenge Lab";
+  credits: number;
+  category: "Completion" | "Skill";
   url?: string;
+  badgeId?: string;
+  badgeUrl?: string;
 }
 
 export interface BadgeStatus {
+  /** Uses the course/lab key, not profile-specific badge issuance IDs. */
   badgeKey: string;
   earned: boolean;
   earnedDate?: string;

@@ -1,3 +1,5 @@
+import Image from "next/image";
+
 interface Props {
   lastUpdated?: string;
 }
@@ -7,12 +9,14 @@ export default function Header({ lastUpdated }: Props) {
     <header className="sticky top-0 z-40 border-b border-line bg-canvas/85 backdrop-blur">
       <div className="h-[3px] w-full bg-accent" aria-hidden />
       <div className="mx-auto flex h-16 max-w-[1400px] items-center gap-3 px-4 sm:px-6">
-        <div
-          className="flex h-10 w-[104px] shrink-0 items-center justify-center rounded-sm border border-dashed border-faint text-[10px] font-semibold tracking-wider text-faint sm:h-11 sm:w-[132px] sm:text-[11px]"
-          aria-label="GDG logo placeholder"
-        >
-          [ GDG LOGO ]
-        </div>
+        <Image
+          src="/gdg_logo.svg"
+          alt="Google Developer Groups logo"
+          width={88}
+          height={50}
+          priority
+          className="h-10 w-[72px] shrink-0 object-contain sm:h-11 sm:w-[78px]"
+        />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold leading-tight sm:text-base">Google Skills Leaderboard</p>
           <p className="truncate text-[11px] leading-tight text-faint sm:text-xs">

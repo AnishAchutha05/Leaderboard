@@ -83,7 +83,12 @@ export default function ParticipantDetails({ participant, badges, onClose }: Pro
                 ) : <span className="h-6 w-6 shrink-0 rounded-full border-2 border-[#CFCFCF]" aria-hidden />}
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium leading-snug">{badge.name}</p>
-                  <p className={`text-xs ${earned ? "text-soft" : "text-faint"}`}>{earned ? (status?.earnedDate ? `Earned ${formatDate(status.earnedDate)}` : "Earned") : "Pending"}</p>
+                  <p className="text-xs text-faint">
+                    {badge.itemType} · {badge.credits} credit{badge.credits === 1 ? "" : "s"} · {badge.category}
+                  </p>
+                  <p className={`text-xs ${earned ? "text-soft" : "text-faint"}`}>
+                    {earned ? (status?.earnedDate ? `Completed · Earned ${formatDate(status.earnedDate)}` : "Completed") : "Incomplete"}
+                  </p>
                 </div>
                 {link && <a href={link} target="_blank" rel="noopener noreferrer" aria-label={`Open lab: ${badge.name}`} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-sm text-faint hover:bg-canvas hover:text-ink"><ExternalLink className="h-4 w-4" /></a>}
               </li>

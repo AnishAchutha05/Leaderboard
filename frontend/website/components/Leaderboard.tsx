@@ -46,9 +46,17 @@ export default function Leaderboard({ participants, badges, loading, searching, 
             <th scope="col" className={`${NAME_TH} sticky top-0 z-40 border-b border-line px-3 pb-3 text-left align-bottom text-[11px] font-semibold uppercase tracking-wider text-faint`}>Participant</th>
             <th scope="col" className="sticky top-0 z-20 w-20 min-w-20 border-b border-line bg-panel px-3 pb-3 text-center align-bottom text-[11px] font-semibold uppercase tracking-wider text-faint">Done</th>
             <th scope="col" className="sticky top-0 z-20 w-32 min-w-32 border-b border-line bg-panel px-3 pb-3 text-left align-bottom text-[11px] font-semibold uppercase tracking-wider text-faint">Progress</th>
-            {badges.map((badge) => (
-              <th key={badge.key} scope="col" title={badge.name} className="sticky top-0 z-20 h-[170px] w-12 min-w-12 border-b border-line bg-panel px-0 pb-3 align-bottom">
-                <div className="vlabel mx-auto text-xs font-medium text-soft">{badge.name}</div>
+            {badges.map((badge, index) => (
+              <th
+                key={badge.key}
+                scope="col"
+                title={`${badge.name} · ${badge.itemType} · ${badge.credits} credits · ${badge.category}`}
+                aria-label={`Task ${index + 1}: ${badge.name}`}
+                className="sticky top-0 z-20 h-[170px] w-12 min-w-12 border-b border-line bg-panel px-0 pb-3 align-bottom"
+              >
+                <div className="vlabel mx-auto text-xs font-medium text-soft">
+                  Task {index + 1}
+                </div>
               </th>
             ))}
           </tr>
