@@ -1,4 +1,3 @@
-
 services:
   postgres:
     image: postgres:16
@@ -16,7 +15,90 @@ services:
       test: ["CMD-SHELL", "pg_isready -U tracker_user -d google_skills_tracker"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+
+  init:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: google-skills-init
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://tracker_user:tracker_password@postgres:5432/google_skills_tracker
+      COURSE_WORKBOOK_PATH: /app/data/course.xlsx
+      PARTICIPANT_WORKBOOK_PATH: /app/data/clean_participants.xlsx
+    command: ["sh", "-c", "alembic upgrade head && python -m backend.database.bootstrap"]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: google-skills-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+psycopg://tracker_user:tracker_password@postgres:5432/google_skills_tracker
+      CORS_ALLOW_ORIGINS: http://localhost:3000
+      COURSE_WORKBOOK_PATH: /app/data/course.xlsx
+      PARTICIPANT_WORKBOOK_PATH: /app/data/clean_participants.xlsx
+      DB_POOL_SIZE: "5"
+      DB_MAX_OVERFLOW: "10"
+      DB_POOL_TIMEOUT: "30"
+      DB_POOL_RECYCLE: "1800"
+    # Migrations/bootstrap run in init; start API directly.
+    command: ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: google-skills-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: postgresql+psycopg://tracker_user:tracker_password@postgres:5432/google_skills_tracker
+      COURSE_WORKBOOK_PATH: /app/data/course.xlsx
+      PARTICIPANT_WORKBOOK_PATH: /app/data/clean_participants.xlsx
+      SCRAPE_INTERVAL_MINUTES: "60"
+      SCRAPE_CONCURRENCY: "3"
+      SCRAPE_RUN_INITIAL: "true"
+      SCRAPE_LAUNCH_TIMEOUT_MS: "30000"
+      SCRAPE_NAVIGATION_TIMEOUT_MS: "60000"
+      SCRAPE_OPERATION_TIMEOUT_MS: "120000"
+      SCRAPE_SHUTDOWN_GRACE_SECONDS: "180"
+      LOG_LEVEL: INFO
+      DB_POOL_SIZE: "5"
+      DB_MAX_OVERFLOW: "5"
+      DB_POOL_TIMEOUT: "30"
+      DB_POOL_RECYCLE: "1800"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend/website
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    container_name: google-skills-frontend
+    depends_on:
+      - api
+    environment:
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
 
 volumes:
   postgres_data:

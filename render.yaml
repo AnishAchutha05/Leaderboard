@@ -48,7 +48,7 @@ services:
       - key: SCRAPE_CONCURRENCY
         value: "3"
       - key: SCRAPE_RUN_INITIAL
-        value: "false"
+        value: "true"
       - key: SCRAPE_LAUNCH_TIMEOUT_MS
         value: "30000"
       - key: SCRAPE_NAVIGATION_TIMEOUT_MS

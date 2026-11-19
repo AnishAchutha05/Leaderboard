@@ -22,4 +22,4 @@ ENV COURSE_WORKBOOK_PATH=/app/data/course.xlsx
 
 EXPOSE 8000
 
-CMD ["sh", "-c", "alembic upgrade head && uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "alembic upgrade head && python -m backend.database.bootstrap && uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000}"]
