@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Check, ExternalLink, Mail, X } from "lucide-react";
+import { Check, ExternalLink, X } from "lucide-react";
 import type { Badge, Participant } from "@/lib/types";
 import { formatDate, initials } from "@/lib/format";
 import ProgressBar from "./ProgressBar";
@@ -38,7 +38,6 @@ export default function ParticipantDetails({ participant, badges, onClose }: Pro
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-lg font-semibold leading-tight">{participant.name}</h2>
             <div className="mt-1.5 flex flex-col gap-1 text-sm">
-              {participant.email && <a href={`mailto:${participant.email}`} className="inline-flex items-center gap-1.5 truncate text-soft hover:text-ink hover:underline"><Mail className="h-3.5 w-3.5 shrink-0" aria-hidden /><span className="truncate">{participant.email}</span></a>}
               {participant.profileUrl && (
                 <a href={participant.profileUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 font-medium text-accent-deep hover:underline">
                   <ExternalLink className="h-3.5 w-3.5 shrink-0" aria-hidden />CloudMAX profile

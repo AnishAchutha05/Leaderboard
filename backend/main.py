@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
@@ -256,8 +256,39 @@ def _import_course_rows(db: Session, course_rows: list[dict]) -> dict:
             if _normalize_text(lab.badge.name) not in expected_names:
                 lab.badge_id = badge.id
         imported += 1
+
+    workbook_urls = {(row.get("lab_url") or "") for row in course_rows}
+    removed_labs = []
+    for lab in db.scalars(select(Lab)).all():
+        if lab.url in workbook_urls:
+            continue
+        replacement = None
+        for row in course_rows:
+            same_name = _normalize_text(lab.name) == _normalize_text(row.get("lab_name"))
+            same_badge = _normalize_text(lab.badge.name) in _expected_badge_names(row)
+            if same_name or same_badge:
+                candidate = db.scalar(select(Lab).where(Lab.url == (row.get("lab_url") or "")))
+                if candidate and candidate.id != lab.id:
+                    replacement = candidate
+                    break
+        comp_count = int(db.scalar(
+            select(func.count()).select_from(Completion).where(Completion.lab_id == lab.id)
+        ) or 0)
+        if comp_count:
+            if replacement is None:
+                unresolved.append({
+                    "name": lab.name,
+                    "url": lab.url,
+                    "reason": "Stale lab not in workbook has completions and no safe replacement; kept.",
+                })
+                continue
+            for completion in db.scalars(select(Completion).where(Completion.lab_id == lab.id)).all():
+                completion.lab_id = replacement.id
+        db.delete(lab)
+        removed_labs.append({"id": lab.id, "name": lab.name, "url": lab.url, "remapped_completions": comp_count})
+
     db.flush()
-    return {"imported": imported, "unresolved": unresolved}
+    return {"imported": imported, "unresolved": unresolved, "removed_labs": removed_labs}
 
 
 def _import_verified_badges(db: Session, records: list[dict]) -> dict:

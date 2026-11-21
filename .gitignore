@@ -12,16 +12,17 @@ __pycache__/
 .env.*
 !.env.example
 
-# Database / generated data (never commit participant PII)
+# Database / generated data (never commit participant PII by default)
 data/clean_participants*.xlsx
 data/participants*.xlsx
 data/*participant*.csv
 data/*participants*.csv
 data/*results*.xlsx
 data/*.csv
-# Course workbooks are required runtime/config assets and may be deployed.
+# Workbooks allowed in this repo.
 !data/course.xlsx
 !data/GCP_Labs_Courses_Professional.xlsx
+!data/clean_participants.xlsx
 *.db
 *.sqlite3
 
