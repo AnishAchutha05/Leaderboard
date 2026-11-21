@@ -13,7 +13,7 @@ __pycache__/
 !.env.example
 
 # Database / generated data (never commit participant PII by default)
-data/clean_participants*.xlsx
+
 data/participants*.xlsx
 data/*participant*.csv
 data/*participants*.csv
