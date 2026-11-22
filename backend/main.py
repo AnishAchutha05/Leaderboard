@@ -1,5 +1,7 @@
 from datetime import datetime, timezone
 import os
+import threading
+import time
 from pathlib import Path
 import logging
 import re
@@ -10,7 +12,7 @@ from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 logger = logging.getLogger(__name__)
 
@@ -342,23 +344,35 @@ def _date_value(value):
 
 
 def _serialize_users(db: Session) -> list[dict]:
+    # selectinload fetches completions in one extra query instead of joining
+    # them onto every user row; badges are few and resolve from the identity map.
     users = db.scalars(select(User).options(
-        joinedload(User.completions).joinedload(Completion.badge),
-        joinedload(User.completions).joinedload(Completion.lab),
-    ).order_by(User.id)).unique().all()
+        selectinload(User.completions).selectinload(Completion.badge),
+    ).order_by(User.id)).all()
     labs_by_id = db.scalars(select(Lab).options(joinedload(Lab.badge)).order_by(Lab.id)).unique().all()
-    latest_logs = {}
-    for log in db.scalars(select(ScrapeLog).order_by(ScrapeLog.user_id, ScrapeLog.id)):
-        latest_logs[log.user_id] = log
+    # Only the newest scrape log per user is needed. The table grows by one row
+    # per user per scrape, so loading all of it gets slower every hour.
+    latest_log_ids = select(func.max(ScrapeLog.id)).group_by(ScrapeLog.user_id)
+    latest_logs = {
+        log.user_id: log
+        for log in db.scalars(select(ScrapeLog).where(ScrapeLog.id.in_(latest_log_ids)))
+    }
     course_rows = []
     for user in users:
-        completions = [completion for completion in user.completions if completion.is_completed]
+        # Sorted so the response is stable between requests (the relationship is unordered).
+        completions = sorted(
+            (completion for completion in user.completions if completion.is_completed),
+            key=lambda completion: completion.id,
+        )
+        completion_by_lab = {}
+        for item in completions:
+            completion_by_lab.setdefault(item.lab_id, item)
         labs = []
         for lab in labs_by_id:
             # Badge IDs are issuance IDs and differ between learners. The
             # verified association for a participant is the completion's FK
             # to this lab, not equality with the lab's canonical badge ID.
-            completion = next((item for item in completions if item.lab_id == lab.id), None)
+            completion = completion_by_lab.get(lab.id)
             labs.append({
                 "lab_name": lab.name,
                 "name": lab.name,
@@ -578,6 +592,7 @@ async def upload_course(file: UploadFile = File(...)):
     rows = _load_course_rows(target_path)
     with SessionLocal.begin() as db:
         result = _import_course_rows(db, rows)
+    _invalidate_leaderboard_cache()
     return {"message": "Course workbook uploaded and checked.", "total_labs": len(rows),
             "imported_labs": result["imported"], "unresolved": result["unresolved"]}
 
@@ -598,6 +613,7 @@ async def upload_participants(file: UploadFile = File(...)):
             raise HTTPException(status_code=400, detail=str(error)) from error
     with SessionLocal.begin() as db:
         result = _import_users(db, records)
+    _invalidate_leaderboard_cache()
     return {"message": "Participant workbook imported.", "total_participants": len(records), **result,
             "issues": result["issues"] + load_participants.last_issues}
 
@@ -631,6 +647,7 @@ def process_all_participants():
         raise HTTPException(status_code=400, detail="Import a participant workbook first.")
     course_rows = _load_course_rows()
     results = [_process_user(user_id, course_rows=course_rows) for user_id in user_ids]
+    _invalidate_leaderboard_cache()
     return {
         "message": "Participant processing completed.",
         "total_participants": len(results),
@@ -642,20 +659,46 @@ def process_all_participants():
 
 @app.post("/api/participants/{participant_index}/refresh")
 def refresh_participant(participant_index: int):
-    return _process_user(participant_index)
+    result = _process_user(participant_index)
+    _invalidate_leaderboard_cache()
+    return result
+
+
+# Rankings only change when the scraper writes new completions, so the fully
+# serialized board is reused for a short time instead of being rebuilt from the
+# database on every page view and every 60-second client poll.
+LEADERBOARD_CACHE_SECONDS = max(0.0, float(os.getenv("LEADERBOARD_CACHE_SECONDS", "30")))
+_leaderboard_cache_lock = threading.Lock()
+_leaderboard_cache: dict = {"expires_at": 0.0, "records": None}
+
+
+def _invalidate_leaderboard_cache() -> None:
+    with _leaderboard_cache_lock:
+        _leaderboard_cache["expires_at"] = 0.0
+        _leaderboard_cache["records"] = None
+
+
+def _cached_serialized_users() -> list[dict]:
+    # Holding the lock while rebuilding means concurrent requests wait for one
+    # rebuild instead of each running the same queries.
+    with _leaderboard_cache_lock:
+        now = time.monotonic()
+        records = _leaderboard_cache["records"]
+        if records is None or now >= _leaderboard_cache["expires_at"]:
+            with SessionLocal() as db:
+                records = _serialize_users(db)
+            _leaderboard_cache["records"] = records
+            _leaderboard_cache["expires_at"] = time.monotonic() + LEADERBOARD_CACHE_SECONDS
+        return records
 
 
 @app.get("/api/leaderboard")
 def get_full_leaderboard():
-    with SessionLocal() as db:
-        records = _serialize_users(db)
-    return get_leaderboard(records)
+    return get_leaderboard(_cached_serialized_users())
 
 
 @app.get("/api/leaderboard/top/{limit}")
 def get_top_leaderboard(limit: int):
     if limit not in (10, 100, 250):
         raise HTTPException(status_code=400, detail="Limit must be 10, 100, or 250.")
-    with SessionLocal() as db:
-        records = _serialize_users(db)
-    return get_leaderboard(records, limit)
+    return get_leaderboard(_cached_serialized_users(), limit)
